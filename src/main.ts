@@ -10,12 +10,13 @@ const PADDLE_HEIGHT = 10;
 const PADDLE_WIDTH = 75;
 const BALL_RADIUS = 10;
 const BRICK_ROW_COUNT = 5;
-const BRICK_COLUMN_COUNT = 9;
+const BRICK_COLUMN_COUNT = 8;
 const BRICK_WIDTH = 75;
 const BRICK_HEIGHT = 20;
 const BRICK_PADDING = 10;
-const BRICK_OFFSET_TOP = 30;
-const BRICK_OFFSET_LEFT = 30;
+const BRICK_OFFSET_TOP = 60;
+const BRICK_OFFSET_LEFT = 65;
+const PADDLE_BOTTOM_MARGIN = 50;
 
 // Game State
 let score = 0;
@@ -23,6 +24,7 @@ let lives = 3;
 let rightPressed = false;
 let leftPressed = false;
 let gameRunning = false;
+let ballMoving = false;
 let animationId: number;
 
 // Entities
@@ -45,7 +47,7 @@ interface Brick {
 
 let ball: Ball = {
   x: canvas.width / 2,
-  y: canvas.height - 30,
+  y: canvas.height - 30 - PADDLE_BOTTOM_MARGIN,
   dx: 4,
   dy: -4
 };
@@ -77,6 +79,8 @@ function keyDownHandler(e: KeyboardEvent) {
     rightPressed = true;
   } else if (e.key === 'Left' || e.key === 'ArrowLeft') {
     leftPressed = true;
+  } else if (e.code === 'Space' && !ballMoving && gameRunning) {
+    ballMoving = true;
   }
 }
 
@@ -99,7 +103,7 @@ function drawBall() {
 
 function drawPaddle() {
   ctx.beginPath();
-  ctx.rect(paddle.x, canvas.height - PADDLE_HEIGHT, PADDLE_WIDTH, PADDLE_HEIGHT);
+  ctx.rect(paddle.x, canvas.height - PADDLE_HEIGHT - PADDLE_BOTTOM_MARGIN, PADDLE_WIDTH, PADDLE_HEIGHT);
   ctx.fillStyle = '#0095DD';
   ctx.fill();
   ctx.closePath();
@@ -158,34 +162,57 @@ function draw() {
   drawPaddle();
   collisionDetection();
 
-  // Ball Movement
-  if (ball.x + ball.dx > canvas.width - BALL_RADIUS || ball.x + ball.dx < BALL_RADIUS) {
-    ball.dx = -ball.dx;
-  }
-  if (ball.y + ball.dy < BALL_RADIUS) {
-    ball.dy = -ball.dy;
-  } else if (ball.y + ball.dy > canvas.height - BALL_RADIUS) {
-    if (ball.x > paddle.x && ball.x < paddle.x + PADDLE_WIDTH) {
+  if (ballMoving) {
+    // Ball Movement
+    if (ball.x + ball.dx > canvas.width - BALL_RADIUS || ball.x + ball.dx < BALL_RADIUS) {
+      ball.dx = -ball.dx;
+    }
+    if (ball.y + ball.dy < BALL_RADIUS) {
       ball.dy = -ball.dy;
-      // Add some speed up or angle change based on where it hit the paddle could be nice, but keeping it simple
-    } else {
-      lives--;
-      livesElement.innerText = lives.toString();
-      if (!lives) {
-        gameOver(false);
-        return;
-      } else {
-        ball.x = canvas.width / 2;
-        ball.y = canvas.height - 30;
-        ball.dx = 4;
-        ball.dy = -4;
-        paddle.x = (canvas.width - PADDLE_WIDTH) / 2;
+    } else if (ball.y + ball.dy > canvas.height - BALL_RADIUS - PADDLE_BOTTOM_MARGIN) {
+      if (ball.x > paddle.x && ball.x < paddle.x + PADDLE_WIDTH) {
+        // Calculate hit position relative to paddle center (-1 to 1)
+        let hitPoint = ball.x - (paddle.x + PADDLE_WIDTH / 2);
+        let normalizedHit = hitPoint / (PADDLE_WIDTH / 2);
+
+        // Calculate new angle (max 60 degrees)
+        let angle = normalizedHit * (Math.PI / 3);
+
+        // Maintain constant speed
+        let speed = Math.sqrt(ball.dx * ball.dx + ball.dy * ball.dy);
+
+        ball.dx = speed * Math.sin(angle);
+        ball.dy = -speed * Math.cos(angle);
+      } else if (ball.y + ball.dy > canvas.height - BALL_RADIUS) {
+        lives--;
+        livesElement.innerText = lives.toString();
+        if (!lives) {
+          gameOver(false);
+          return;
+        } else {
+          ballMoving = false;
+          ball.x = canvas.width / 2;
+          ball.y = canvas.height - 30 - PADDLE_BOTTOM_MARGIN;
+          ball.dx = 4;
+          ball.dy = -4;
+          paddle.x = (canvas.width - PADDLE_WIDTH) / 2;
+        }
       }
     }
-  }
 
-  ball.x += ball.dx;
-  ball.y += ball.dy;
+    ball.x += ball.dx;
+    ball.y += ball.dy;
+  } else {
+    // Stick ball to paddle when not moving
+    ball.x = paddle.x + PADDLE_WIDTH / 2;
+    ball.y = canvas.height - PADDLE_HEIGHT - PADDLE_BOTTOM_MARGIN - BALL_RADIUS;
+    
+    // Draw "Press Space" message
+    ctx.font = "20px Arial";
+    ctx.fillStyle = "white";
+    ctx.textAlign = "center";
+    ctx.fillText("Press SPACE to launch", canvas.width / 2, canvas.height / 2 + 50);
+  }
 
   // Paddle Movement
   if (rightPressed && paddle.x < canvas.width - PADDLE_WIDTH) {
