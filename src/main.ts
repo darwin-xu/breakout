@@ -170,7 +170,10 @@ function draw() {
     if (ball.y + ball.dy < BALL_RADIUS) {
       ball.dy = -ball.dy;
     } else if (ball.y + ball.dy > canvas.height - BALL_RADIUS - PADDLE_BOTTOM_MARGIN) {
-      if (ball.x > paddle.x && ball.x < paddle.x + PADDLE_WIDTH) {
+      // Only bounce if the ball is hitting the top of the paddle (not from below/side)
+      // We check if the ball's center is roughly above or within the paddle's top area
+      const paddleTop = canvas.height - PADDLE_HEIGHT - PADDLE_BOTTOM_MARGIN;
+      if (ball.x > paddle.x && ball.x < paddle.x + PADDLE_WIDTH && ball.y < paddleTop + BALL_RADIUS) {
         // Calculate hit position relative to paddle center (-1 to 1)
         let hitPoint = ball.x - (paddle.x + PADDLE_WIDTH / 2);
         let normalizedHit = hitPoint / (PADDLE_WIDTH / 2);
