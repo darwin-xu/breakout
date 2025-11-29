@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Breakout Game</title>
+    <link rel="stylesheet" href="./src/style.css">
+  </head>
+  <body>
+    <div id="app">
+      <h1>Breakout</h1>
+      <canvas id="gameCanvas" width="800" height="1000"></canvas>
+      <div id="scoreBoard">Score: <span id="score">0</span> | Lives: <span id="lives">3</span></div>
+      <div id="message" class="hidden"></div>
+      <button id="restartBtn" class="hidden">Restart Game</button>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
