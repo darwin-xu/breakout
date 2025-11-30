@@ -1,9 +1,19 @@
+import { DQNAgent, type AgentSnapshot } from './ai';
+
 const canvas = document.getElementById('gameCanvas') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
 const scoreElement = document.getElementById('score')!;
 const livesElement = document.getElementById('lives')!;
 const messageElement = document.getElementById('message')!;
 const restartBtn = document.getElementById('restartBtn')!;
+const aiCheckbox = document.getElementById('aiMode') as HTMLInputElement;
+const epsilonDisplay = document.getElementById('epsilonDisplay')!;
+const aiStatsElement = document.getElementById('aiStats')!;
+const aiEpisodeElement = document.getElementById('aiEpisode')!;
+const aiHighScoreElement = document.getElementById('aiHighScore')!;
+const aiAvgRewardElement = document.getElementById('aiAvgReward')!;
+const aiAvgLengthElement = document.getElementById('aiAvgLength')!;
+const aiHistoryElement = document.getElementById('aiHistory')!;
 
 // Game Constants
 const PADDLE_HEIGHT = 10;
@@ -17,6 +27,8 @@ const BRICK_PADDING = 10;
 const BRICK_OFFSET_TOP = 60;
 const BRICK_OFFSET_LEFT = 65;
 const PADDLE_BOTTOM_MARGIN = 50;
+const MAX_HISTORY = 10;
+const AGENT_STORAGE_KEY = 'breakout-ai-agent-v1';
 
 // Game State
 let score = 0;
@@ -26,6 +38,20 @@ let leftPressed = false;
 let gameRunning = false;
 let ballMoving = false;
 let animationId: number;
+let lastFrameReward = 0;
+let aiEpisode = 0;
+let aiHighScore = 0;
+let currentEpisodeReward = 0;
+let currentEpisodeFrames = 0;
+const recentRewards: number[] = [];
+const recentLengths: number[] = [];
+const recentEpisodes: EpisodeSummary[] = [];
+let pendingTerminalState: number[] | null = null;
+let pendingTerminalDone = false;
+let pendingGameOverResult: boolean | null = null;
+
+const agent = new DQNAgent(5, 3);
+loadAgentFromStorage();
 
 // Entities
 interface Ball {
@@ -44,6 +70,13 @@ interface Brick {
   y: number;
   status: number; // 1 = active, 0 = broken
 }
+
+type EpisodeSummary = {
+  episode: number;
+  score: number;
+  reward: number;
+  frames: number;
+};
 
 let ball: Ball = {
   x: canvas.width / 2,
@@ -73,6 +106,161 @@ function initBricks() {
 document.addEventListener('keydown', keyDownHandler, false);
 document.addEventListener('keyup', keyUpHandler, false);
 restartBtn.addEventListener('click', restartGame);
+aiCheckbox.addEventListener('change', () => {
+  const enabled = aiCheckbox.checked;
+  aiStatsElement.style.display = enabled ? 'block' : 'none';
+  if (enabled) {
+    loadAgentFromStorage();
+    resetAITracking();
+    resetGame();
+  } else {
+    leftPressed = false;
+    rightPressed = false;
+  }
+});
+  
+function getStorage(): Storage | null {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return null;
+  }
+  try {
+    return window.localStorage;
+  } catch (error) {
+    console.warn('Local storage unavailable', error);
+    return null;
+  }
+}
+
+function loadAgentFromStorage() {
+  const storage = getStorage();
+  if (!storage) return;
+  try {
+    const raw = storage.getItem(AGENT_STORAGE_KEY);
+    if (!raw) return;
+    const snapshot = JSON.parse(raw) as AgentSnapshot;
+    agent.load(snapshot);
+    epsilonDisplay.innerText = agent.epsilon.toFixed(4);
+  } catch (error) {
+    console.warn('Failed to load AI snapshot', error);
+  }
+}
+
+function persistAgentState() {
+  const storage = getStorage();
+  if (!storage) return;
+  try {
+    const snapshot = agent.serialize();
+    storage.setItem(AGENT_STORAGE_KEY, JSON.stringify(snapshot));
+  } catch (error) {
+    console.warn('Failed to save AI snapshot', error);
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    persistAgentState();
+  });
+}
+
+function buildStateSnapshot(overrides?: {
+  ballX?: number;
+  ballY?: number;
+  ballDX?: number;
+  ballDY?: number;
+}): number[] {
+  const ballX = overrides?.ballX ?? ball.x;
+  const ballY = overrides?.ballY ?? ball.y;
+  const ballDX = overrides?.ballDX ?? ball.dx;
+  const ballDY = overrides?.ballDY ?? ball.dy;
+  return [
+    ballX / canvas.width,
+    ballY / canvas.height,
+    paddle.x / canvas.width,
+    ballDX / 10,
+    ballDY / 10
+  ];
+}
+
+
+function resetAITracking() {
+  aiEpisode = 0;
+  aiHighScore = 0;
+  currentEpisodeReward = 0;
+  currentEpisodeFrames = 0;
+  recentRewards.length = 0;
+  recentLengths.length = 0;
+  recentEpisodes.length = 0;
+  aiEpisodeElement.innerText = '0';
+  aiHighScoreElement.innerText = '0';
+  aiAvgRewardElement.innerText = '0.000';
+  aiAvgLengthElement.innerText = '0';
+  aiHistoryElement.innerHTML = '';
+  epsilonDisplay.innerText = agent.epsilon.toFixed(4);
+}
+
+function updateAIAverages() {
+  const avgReward = recentRewards.length
+    ? recentRewards.reduce((sum, value) => sum + value, 0) / recentRewards.length
+    : 0;
+  const avgLength = recentLengths.length
+    ? recentLengths.reduce((sum, value) => sum + value, 0) / recentLengths.length
+    : 0;
+  aiAvgRewardElement.innerText = avgReward.toFixed(3);
+  aiAvgLengthElement.innerText = Math.round(avgLength).toString();
+}
+
+function renderAIHistory() {
+  aiHistoryElement.innerHTML = recentEpisodes
+    .map(
+      (entry) =>
+        `<li>Ep ${entry.episode}: score ${entry.score}, reward ${entry.reward.toFixed(2)}, frames ${entry.frames}</li>`
+    )
+    .join('');
+}
+
+function recordEpisodeStats() {
+  if (!aiCheckbox.checked) {
+    return;
+  }
+  if (currentEpisodeFrames === 0) {
+    return;
+  }
+
+  if (score > aiHighScore) {
+    aiHighScore = score;
+    aiHighScoreElement.innerText = aiHighScore.toString();
+  }
+
+  aiEpisode += 1;
+  aiEpisodeElement.innerText = aiEpisode.toString();
+
+  recentRewards.push(currentEpisodeReward);
+  if (recentRewards.length > MAX_HISTORY) {
+    recentRewards.shift();
+  }
+
+  recentLengths.push(currentEpisodeFrames);
+  if (recentLengths.length > MAX_HISTORY) {
+    recentLengths.shift();
+  }
+
+  recentEpisodes.unshift({
+    episode: aiEpisode,
+    score,
+    reward: currentEpisodeReward,
+    frames: currentEpisodeFrames
+  });
+  if (recentEpisodes.length > MAX_HISTORY) {
+    recentEpisodes.pop();
+  }
+
+  updateAIAverages();
+  renderAIHistory();
+  persistAgentState();
+
+  currentEpisodeReward = 0;
+  currentEpisodeFrames = 0;
+}
 
 function keyDownHandler(e: KeyboardEvent) {
   if (e.key === 'Right' || e.key === 'ArrowRight') {
@@ -142,9 +330,12 @@ function collisionDetection() {
           ball.dy = -ball.dy;
           b.status = 0;
           score++;
+          lastFrameReward += 1.0; // Reward for hitting brick
           scoreElement.innerText = score.toString();
           if (score === BRICK_ROW_COUNT * BRICK_COLUMN_COUNT) {
-            gameOver(true);
+            pendingTerminalState = buildStateSnapshot();
+            pendingTerminalDone = true;
+            pendingGameOverResult = true;
           }
         }
       }
@@ -155,6 +346,37 @@ function collisionDetection() {
 // Game Loop
 function draw() {
   if (!gameRunning) return;
+
+  const wasBallMoving = ballMoving;
+
+  if (aiCheckbox.checked) {
+    currentEpisodeFrames += 1;
+  }
+
+  // AI Logic - Pre-Physics
+  let currentState: number[] = [];
+  let action = 0;
+  
+  if (aiCheckbox.checked) {
+    if (!ballMoving) {
+       ballMoving = true; // Auto-start
+    }
+    
+    currentState = [
+        ball.x / canvas.width,
+        ball.y / canvas.height,
+        paddle.x / canvas.width,
+        ball.dx / 10,
+        ball.dy / 10
+    ];
+    action = agent.act(currentState);
+    
+    // 0: Stay, 1: Left, 2: Right
+    leftPressed = (action === 1);
+    rightPressed = (action === 2);
+    
+    epsilonDisplay.innerText = agent.epsilon.toFixed(4);
+  }
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawBricks();
@@ -186,12 +408,19 @@ function draw() {
 
         ball.dx = speed * Math.sin(angle);
         ball.dy = -speed * Math.cos(angle);
+        
+        lastFrameReward += 0.5; // Reward for hitting paddle
       } else if (ball.y + ball.dy > canvas.height - BALL_RADIUS) {
         lives--;
         livesElement.innerText = lives.toString();
+        lastFrameReward -= 1.0; // Penalty for losing life
+        
         if (!lives) {
-          gameOver(false);
-          return;
+          pendingTerminalState = buildStateSnapshot({
+            ballY: Math.min(canvas.height, ball.y + ball.dy)
+          });
+          pendingTerminalDone = true;
+          pendingGameOverResult = false;
         } else {
           ballMoving = false;
           ball.x = canvas.width / 2;
@@ -223,13 +452,83 @@ function draw() {
   } else if (leftPressed && paddle.x > 0) {
     paddle.x -= 7;
   }
+  
+  // AI Logic - Post-Physics (Training)
+  if (aiCheckbox.checked && wasBallMoving) {
+      const fallbackNextState = [
+        ball.x / canvas.width,
+        ball.y / canvas.height,
+        paddle.x / canvas.width,
+        ball.dx / 10,
+        ball.dy / 10
+      ];
+      const nextState = pendingTerminalState ?? fallbackNextState;
+      const done = pendingTerminalState !== null && pendingTerminalDone;
+      
+      // Small survival reward
+      lastFrameReward += 0.001;
+      
+      agent.remember(currentState, action, lastFrameReward, nextState, done);
+      agent.replay(32); // Train on a batch
 
-  animationId = requestAnimationFrame(draw);
+      if (done) {
+        pendingTerminalState = null;
+        pendingTerminalDone = false;
+      }
+  }
+  
+  if (aiCheckbox.checked) {
+    currentEpisodeReward += lastFrameReward;
+  }
+  lastFrameReward = 0; // Reset for next frame
+
+  if (pendingGameOverResult !== null) {
+    const result = pendingGameOverResult;
+    pendingGameOverResult = null;
+    gameOver(result);
+    return;
+  }
+
+  if (gameRunning) {
+      animationId = requestAnimationFrame(draw);
+  }
+}
+
+function resetGame() {
+  score = 0;
+  lives = 3;
+  scoreElement.innerText = score.toString();
+  livesElement.innerText = lives.toString();
+  
+  ball.x = canvas.width / 2;
+  ball.y = canvas.height - 30 - PADDLE_BOTTOM_MARGIN;
+  ball.dx = 4;
+  ball.dy = -4;
+  
+  paddle.x = (canvas.width - PADDLE_WIDTH) / 2;
+  
+  initBricks();
+  
+  gameRunning = true;
+  ballMoving = false;
+    currentEpisodeReward = 0;
+    currentEpisodeFrames = 0;
+  
+  messageElement.classList.add('hidden');
+  restartBtn.classList.add('hidden');
 }
 
 function gameOver(win: boolean) {
   gameRunning = false;
   cancelAnimationFrame(animationId);
+  pendingTerminalState = null;
+  pendingTerminalDone = false;
+  if (aiCheckbox.checked) {
+      recordEpisodeStats();
+      resetGame();
+      draw();
+      return;
+  }
   messageElement.innerText = win ? 'YOU WIN, CONGRATS!' : 'GAME OVER';
   messageElement.classList.remove('hidden');
   restartBtn.classList.remove('hidden');

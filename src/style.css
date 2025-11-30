@@ -24,7 +24,51 @@ body {
   max-width: 1280px;
   margin: 0 auto;
   padding: 2rem;
+}
+
+.layout {
+  display: flex;
+  gap: 2rem;
+  align-items: flex-start;
+}
+
+.game-column {
+  flex: 1;
   text-align: center;
+}
+
+.ai-toggle {
+  margin-top: 10px;
+}
+
+.ai-panel {
+  width: 400px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  padding: 1rem;
+  font-size: 0.9em;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(0, 0, 0, 0.4);
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.ai-panel ul {
+  margin: 6px 0 0 1.25rem;
+  padding: 0;
+  list-style: disc;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+@media (max-width: 1024px) {
+  .layout {
+    flex-direction: column;
+  }
+
+  .ai-panel {
+    width: 100%;
+  }
 }
 
 canvas {

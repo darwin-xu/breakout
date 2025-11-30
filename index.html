@@ -9,11 +9,35 @@
   </head>
   <body>
     <div id="app">
-      <h1>Breakout</h1>
-      <canvas id="gameCanvas" width="800" height="1000"></canvas>
-      <div id="scoreBoard">Score: <span id="score">0</span> | Lives: <span id="lives">3</span></div>
-      <div id="message" class="hidden"></div>
-      <button id="restartBtn" class="hidden">Restart Game</button>
+      <div class="layout">
+        <div class="game-column">
+          <h1>Breakout</h1>
+          <canvas id="gameCanvas" width="800" height="1000"></canvas>
+          <div id="scoreBoard">Score: <span id="score">0</span> | Lives: <span id="lives">3</span></div>
+          <div class="ai-toggle">
+            <label>
+              <input type="checkbox" id="aiMode"> AI Mode
+            </label>
+          </div>
+          <div id="message" class="hidden"></div>
+          <button id="restartBtn" class="hidden">Restart Game</button>
+        </div>
+        <aside id="aiStats" class="ai-panel" style="display: none;">
+          <div>
+            <span>Epsilon: <span id="epsilonDisplay">1.0000</span></span> |
+            <span>Episode: <span id="aiEpisode">0</span></span> |
+            <span>High Score: <span id="aiHighScore">0</span></span>
+          </div>
+          <div style="margin-top: 4px;">
+            <span>Avg Reward (last 10): <span id="aiAvgReward">0.000</span></span> |
+            <span>Avg Episode Length: <span id="aiAvgLength">0</span> frames</span>
+          </div>
+          <div style="margin-top: 4px;">
+            Recent Episodes:
+            <ul id="aiHistory"></ul>
+          </div>
+        </aside>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
