@@ -19,6 +19,7 @@ const aiHistoryElement = document.getElementById('aiHistory')!;
 const PADDLE_HEIGHT = 10;
 const PADDLE_WIDTH = 75;
 const BALL_RADIUS = 10;
+const BALL_BASE_SPEED = Math.sqrt(4 * 4 + 4 * 4);
 const BRICK_ROW_COUNT = 5;
 const BRICK_COLUMN_COUNT = 8;
 const BRICK_WIDTH = 75;
@@ -29,6 +30,7 @@ const BRICK_OFFSET_LEFT = 65;
 const PADDLE_BOTTOM_MARGIN = 50;
 const MAX_HISTORY = 10;
 const AGENT_STORAGE_KEY = 'breakout-ai-agent-v1';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000';
 
 // Game State
 let score = 0;
@@ -52,6 +54,7 @@ let pendingGameOverResult: boolean | null = null;
 
 const agent = new DQNAgent(5, 3);
 loadAgentFromStorage();
+let latestServerSync: Promise<boolean> | null = loadAgentFromServer();
 
 // Entities
 interface Ball {
@@ -76,6 +79,7 @@ type EpisodeSummary = {
   score: number;
   reward: number;
   frames: number;
+  epsilon: number;
 };
 
 let ball: Ball = {
@@ -90,6 +94,26 @@ let paddle: Paddle = {
 };
 
 let bricks: Brick[][] = [];
+
+function resetBallPosition() {
+  ball.x = canvas.width / 2;
+  ball.y = canvas.height - 30 - PADDLE_BOTTOM_MARGIN;
+}
+
+function randomizeBallDirection() {
+  const minAngle = -Math.PI / 3;
+  const maxAngle = Math.PI / 3;
+  const angle = Math.random() * (maxAngle - minAngle) + minAngle;
+  ball.dx = BALL_BASE_SPEED * Math.sin(angle);
+  ball.dy = -Math.abs(BALL_BASE_SPEED * Math.cos(angle));
+}
+
+function resetBallState() {
+  resetBallPosition();
+  randomizeBallDirection();
+}
+
+resetBallState();
 
 // Initialize Bricks
 function initBricks() {
@@ -106,11 +130,17 @@ function initBricks() {
 document.addEventListener('keydown', keyDownHandler, false);
 document.addEventListener('keyup', keyUpHandler, false);
 restartBtn.addEventListener('click', restartGame);
-aiCheckbox.addEventListener('change', () => {
+aiCheckbox.addEventListener('change', async () => {
   const enabled = aiCheckbox.checked;
   aiStatsElement.style.display = enabled ? 'block' : 'none';
   if (enabled) {
     loadAgentFromStorage();
+    latestServerSync = loadAgentFromServer();
+    try {
+      await latestServerSync;
+    } catch (error) {
+      console.warn('Server sync failed when enabling AI mode', error);
+    }
     resetAITracking();
     resetGame();
   } else {
@@ -131,26 +161,51 @@ function getStorage(): Storage | null {
   }
 }
 
-function loadAgentFromStorage() {
+function loadAgentFromStorage(): boolean {
   const storage = getStorage();
-  if (!storage) return;
+  if (!storage) return false;
   try {
     const raw = storage.getItem(AGENT_STORAGE_KEY);
-    if (!raw) return;
+    if (!raw) return false;
     const snapshot = JSON.parse(raw) as AgentSnapshot;
     agent.load(snapshot);
     epsilonDisplay.innerText = agent.epsilon.toFixed(4);
+    return true;
   } catch (error) {
     console.warn('Failed to load AI snapshot', error);
   }
+  return false;
 }
 
-function persistAgentState() {
+async function loadAgentFromServer(): Promise<boolean> {
+  if (typeof fetch === 'undefined') {
+    return false;
+  }
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/training-snapshots/latest`);
+    if (!response.ok) {
+      return false;
+    }
+    const payload = await response.json();
+    if (!payload?.snapshot) {
+      return false;
+    }
+    agent.load(payload.snapshot as AgentSnapshot);
+    epsilonDisplay.innerText = agent.epsilon.toFixed(4);
+    persistAgentState(payload.snapshot as AgentSnapshot);
+    return true;
+  } catch (error) {
+    console.warn('Failed to load snapshot from server', error);
+    return false;
+  }
+}
+
+function persistAgentState(snapshot?: AgentSnapshot) {
   const storage = getStorage();
   if (!storage) return;
   try {
-    const snapshot = agent.serialize();
-    storage.setItem(AGENT_STORAGE_KEY, JSON.stringify(snapshot));
+    const data = snapshot ?? agent.serialize();
+    storage.setItem(AGENT_STORAGE_KEY, JSON.stringify(data));
   } catch (error) {
     console.warn('Failed to save AI snapshot', error);
   }
@@ -244,22 +299,57 @@ function recordEpisodeStats() {
     recentLengths.shift();
   }
 
-  recentEpisodes.unshift({
+  const summary: EpisodeSummary = {
     episode: aiEpisode,
     score,
     reward: currentEpisodeReward,
-    frames: currentEpisodeFrames
-  });
+    frames: currentEpisodeFrames,
+    epsilon: agent.epsilon
+  };
+
+  recentEpisodes.unshift(summary);
   if (recentEpisodes.length > MAX_HISTORY) {
     recentEpisodes.pop();
   }
 
   updateAIAverages();
   renderAIHistory();
-  persistAgentState();
+  const snapshot = agent.serialize();
+  persistAgentState(snapshot);
+  void sendSnapshotToServer(summary, snapshot);
 
   currentEpisodeReward = 0;
   currentEpisodeFrames = 0;
+}
+
+async function sendSnapshotToServer(summary: EpisodeSummary, snapshot: AgentSnapshot) {
+  if (typeof fetch === 'undefined') {
+    return;
+  }
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/training-snapshots`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        episode: summary.episode,
+        stats: {
+          score: summary.score,
+          reward: summary.reward,
+          frames: summary.frames,
+          epsilon: summary.epsilon
+        },
+        snapshot
+      })
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      console.warn('Server snapshot sync failed', text);
+    }
+  } catch (error) {
+    console.warn('Unable to reach snapshot server', error);
+  }
 }
 
 function keyDownHandler(e: KeyboardEvent) {
@@ -423,10 +513,7 @@ function draw() {
           pendingGameOverResult = false;
         } else {
           ballMoving = false;
-          ball.x = canvas.width / 2;
-          ball.y = canvas.height - 30 - PADDLE_BOTTOM_MARGIN;
-          ball.dx = 4;
-          ball.dy = -4;
+          resetBallState();
           paddle.x = (canvas.width - PADDLE_WIDTH) / 2;
         }
       }
@@ -500,10 +587,7 @@ function resetGame() {
   scoreElement.innerText = score.toString();
   livesElement.innerText = lives.toString();
   
-  ball.x = canvas.width / 2;
-  ball.y = canvas.height - 30 - PADDLE_BOTTOM_MARGIN;
-  ball.dx = 4;
-  ball.dy = -4;
+  resetBallState();
   
   paddle.x = (canvas.width - PADDLE_WIDTH) / 2;
   
